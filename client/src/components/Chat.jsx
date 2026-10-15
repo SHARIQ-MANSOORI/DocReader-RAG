@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, BookOpen, AlertCircle, Sparkles, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
+import { Send, Bot, User, BookOpen, AlertCircle, Sparkles, ChevronDown, ChevronUp, Copy, Check, FileText, X } from 'lucide-react';
 import { Button } from './ui/Button.jsx';
 import { MarkdownRenderer } from './MarkdownRenderer.jsx';
 
 const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000';
 
-export function Chat({ activeDocument }) {
+export function Chat({ activeDocument, onClearDocument }) {
   const [query, setQuery] = useState('');
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -14,6 +14,16 @@ export function Chat({ activeDocument }) {
   const [copiedIndex, setCopiedIndex] = useState(null);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+
+  const activeDocName = activeDocument
+    ? typeof activeDocument === 'object'
+      ? activeDocument.filename
+      : activeDocument
+    : null;
+
+  const activeDocId = activeDocument && typeof activeDocument === 'object'
+    ? activeDocument.docId
+    : null;
 
   const handleCopy = async (text, index) => {
     try {
@@ -37,6 +47,11 @@ export function Chat({ activeDocument }) {
     const textToSend = typeof customMessage === 'string' ? customMessage : query;
     if (!textToSend.trim() || loading) return;
 
+    if (!activeDocName && !activeDocId) {
+      setError('Please upload a PDF document before asking questions so answers are grounded in your document.');
+      return;
+    }
+
     const userMessage = { role: 'user', content: textToSend.trim() };
     setMessages((prev) => [...prev, userMessage]);
     setQuery('');
@@ -44,9 +59,14 @@ export function Chat({ activeDocument }) {
     setLoading(true);
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/chat?message=${encodeURIComponent(textToSend.trim())}`
-      );
+      const params = new URLSearchParams({
+        message: textToSend.trim(),
+      });
+
+      if (activeDocName) params.append('filename', activeDocName);
+      if (activeDocId) params.append('docId', activeDocId);
+
+      const response = await fetch(`${API_BASE_URL}/chat?${params.toString()}`);
       const data = await response.json();
 
       if (!response.ok) {
@@ -92,18 +112,35 @@ export function Chat({ activeDocument }) {
             <h2 className="text-sm font-semibold text-slate-900">
               Document Assistant
             </h2>
-            <p className="text-[11px] text-slate-500">
-              {activeDocument
-                ? `Querying context from "${activeDocument}"`
-                : 'Answers grounded in your uploaded PDF documents'}
-            </p>
+            <div className="flex items-center gap-2 mt-0.5">
+              {activeDocName ? (
+                <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-medium">
+                  <FileText className="h-3 w-3 text-emerald-600" />
+                  <span className="truncate max-w-[200px]">{activeDocName}</span>
+                  {onClearDocument && (
+                    <button
+                      type="button"
+                      onClick={onClearDocument}
+                      className="text-emerald-500 hover:text-emerald-800 ml-0.5 cursor-pointer"
+                      title="Clear active document"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-500 text-[11px] font-medium">
+                  No document active
+                </span>
+              )}
+            </div>
           </div>
         </div>
         {messages.length > 0 && (
           <button
             type="button"
             onClick={() => setMessages([])}
-            className="text-xs text-slate-400 hover:text-slate-600 font-medium"
+            className="text-xs text-slate-400 hover:text-slate-600 font-medium cursor-pointer"
           >
             Clear chat
           </button>
@@ -118,34 +155,37 @@ export function Chat({ activeDocument }) {
               <Sparkles className="h-6 w-6" />
             </div>
             <h3 className="text-base font-semibold text-slate-800">
-              Ask anything about your document
+              {activeDocName ? `Ask about "${activeDocName}"` : 'Upload a PDF to start asking questions'}
             </h3>
             <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
-              Upload a PDF on the left panel, then ask questions. The assistant
-              will retrieve relevant sections and formulate answers using Gemini.
+              {activeDocName
+                ? 'Your document has been indexed. Ask questions below and the assistant will retrieve exact matching context.'
+                : 'Upload a PDF document on the left panel. Once indexed, the assistant will formulate answers strictly from your file.'}
             </p>
 
             {/* Quick Prompts */}
-            <div className="w-full mt-6 space-y-2">
-              <p className="text-[11px] font-medium text-slate-400 uppercase tracking-wider text-left">
-                Suggested questions:
-              </p>
-              {[
-                'Can you provide a summary of this document?',
-                'What are the key findings or takeaways?',
-                'Explain the main methodology mentioned.',
-              ].map((suggestion, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleSend(suggestion)}
-                  className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 hover:border-indigo-300 text-xs text-slate-700 transition-colors duration-150 flex items-center justify-between"
-                >
-                  <span>{suggestion}</span>
-                  <span className="text-slate-400 text-[10px]">↵</span>
-                </button>
-              ))}
-            </div>
+            {activeDocName && (
+              <div className="w-full mt-6 space-y-2">
+                <p className="text-[11px] font-medium text-slate-400 uppercase tracking-wider text-left">
+                  Suggested questions:
+                </p>
+                {[
+                  'Can you provide a summary of this document?',
+                  'What are the key points or takeaways?',
+                  'Explain the main concepts mentioned.',
+                ].map((suggestion, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => handleSend(suggestion)}
+                    className="w-full text-left p-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 hover:border-indigo-300 text-xs text-slate-700 transition-colors duration-150 flex items-center justify-between cursor-pointer"
+                  >
+                    <span>{suggestion}</span>
+                    <span className="text-slate-400 text-[10px]">↵</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ) : (
           messages.map((msg, index) => (
@@ -174,7 +214,7 @@ export function Chat({ activeDocument }) {
                       <MarkdownRenderer content={msg.content} />
                       <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-200/60">
                         <span className="text-[10px] text-slate-400 font-medium tracking-wide">
-                          AI Response
+                          AI Response {activeDocName ? `• ${activeDocName}` : ''}
                         </span>
                         <button
                           type="button"
@@ -208,7 +248,7 @@ export function Chat({ activeDocument }) {
                   <div className="mt-1 space-y-1.5">
                     <p className="text-[11px] font-medium text-slate-500 flex items-center gap-1">
                       <BookOpen className="h-3 w-3 text-indigo-500" />
-                      Retrieved Context ({msg.docs.length} chunks)
+                      Retrieved Context ({msg.docs.length} excerpts)
                     </p>
                     <div className="space-y-1">
                       {msg.docs.map((doc, docIdx) => {
@@ -224,7 +264,7 @@ export function Chat({ activeDocument }) {
                             <button
                               type="button"
                               onClick={() => toggleDocExpand(`${index}-${docIdx}`)}
-                              className="w-full px-2.5 py-1.5 flex items-center justify-between text-left text-slate-600 hover:bg-slate-100/60"
+                              className="w-full px-2.5 py-1.5 flex items-center justify-between text-left text-slate-600 hover:bg-slate-100/60 cursor-pointer"
                             >
                               <span className="font-medium text-[11px] truncate">
                                 Excerpt {docIdx + 1}{' '}
@@ -299,13 +339,17 @@ export function Chat({ activeDocument }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask a question about the document..."
-            disabled={loading}
-            className="flex-1 h-10 px-3.5 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg outline-none focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 disabled:opacity-50 transition-colors"
+            placeholder={
+              activeDocName
+                ? `Ask a question about "${activeDocName}"...`
+                : 'Upload a document on the left to start asking questions...'
+            }
+            disabled={loading || !activeDocName}
+            className="flex-1 h-10 px-3.5 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg outline-none focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-100 disabled:opacity-50 disabled:bg-slate-100 transition-colors"
           />
           <Button
             type="submit"
-            disabled={!query.trim() || loading}
+            disabled={!query.trim() || loading || !activeDocName}
             loading={loading}
             className="h-10 px-4 shrink-0"
           >

@@ -49,6 +49,15 @@ async function getVectorStore() {
         vectors: { size: 3072, distance: 'Cosine' },
       });
     }
+
+    await client.createPayloadIndex(config.qdrant.collectionName, {
+      field_name: 'metadata.docId',
+      field_schema: 'keyword',
+    }).catch(() => {});
+    await client.createPayloadIndex(config.qdrant.collectionName, {
+      field_name: 'metadata.filename',
+      field_schema: 'keyword',
+    }).catch(() => {});
   } catch (e) {
     // Collection already exists or connection check passed
   }
@@ -105,21 +114,56 @@ async function generateAnswerWithCascade(messages) {
 
 /**
  * Executes similarity search and generates answer via Gemini LLM.
- * Preserves the exact retrieval parameters, prompt template, and output shape.
+ * Strictly isolates search to the requested document (via docId or filename).
  */
-export async function executeRAGQuery(userQuery) {
-  const vectorStore = await getVectorStore();
-  const retriever = vectorStore.asRetriever({
-    k: 2,
-  });
+export async function executeRAGQuery(userQuery, { filename, docId } = {}) {
+  // If no document is uploaded or selected, guide the user to upload one first
+  if (!filename && !docId) {
+    return {
+      message: '⚠️ Please upload a PDF document first before asking questions.',
+      docs: [],
+    };
+  }
 
-  const docs = await retriever.invoke(userQuery);
+  const vectorStore = await getVectorStore();
+
+  // Construct Qdrant filter for strict document isolation
+  const filter = {
+    must: [],
+  };
+
+  if (docId) {
+    filter.must.push({
+      key: 'metadata.docId',
+      match: { value: docId },
+    });
+  } else if (filename) {
+    filter.must.push({
+      key: 'metadata.filename',
+      match: { value: filename },
+    });
+  }
+
+  const docs = await vectorStore.similaritySearch(userQuery, 4, filter);
+
+  if (!docs || docs.length === 0) {
+    return {
+      message: `I could not find relevant content matching your question in "${filename || 'the selected document'}". Please ensure the document has finished indexing or try rephrasing your question.`,
+      docs: [],
+    };
+  }
+
+  const contextText = docs
+    .map((d, i) => `[Excerpt ${i + 1} (Page ${d.metadata?.loc?.pageNumber || 'N/A'})]:\n${d.pageContent}`)
+    .join('\n\n');
 
   const SYSTEM_PROMPT = `
-  You are a helpful AI Assistant who answers the user query based on the available context from the PDF file.
-  Context:
-  ${JSON.stringify(docs)}
-  `;
+You are a helpful AI Assistant who answers the user query strictly based on the available context from the uploaded PDF document: "${filename || 'document'}".
+If the answer cannot be found in the provided context, state that the document does not contain that information. Do not make up facts or hallucinate outside the given context.
+
+Context:
+${contextText}
+`;
 
   try {
     const { content } = await generateAnswerWithCascade([
@@ -134,7 +178,7 @@ export async function executeRAGQuery(userQuery) {
   } catch (err) {
     console.error('[RAG Error] All models in cascade failed:', err.message);
     return {
-      message: '⚠️ Google Gemini is temporarily experiencing high server demand or daily quota limits. Please try asking again in a few moments, or check your API key quota at https://aistudio.google.com/.',
+      message: '⚠️ Google Gemini is temporarily experiencing high server demand or daily quota limits. Please try asking again in a few moments.',
       docs,
     };
   }

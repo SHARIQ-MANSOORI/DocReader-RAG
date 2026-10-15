@@ -29,22 +29,29 @@ export function App() {
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Document Upload & Info (4 cols) */}
         <div className="lg:col-span-4 space-y-4">
-          <FileUpload onUploadSuccess={(filename) => setActiveDocument(filename)} />
+          <FileUpload
+            activeDocument={activeDocument}
+            onUploadSuccess={(doc) => setActiveDocument(doc)}
+            onClearDocument={() => setActiveDocument(null)}
+          />
 
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 text-xs text-slate-600 space-y-2">
             <h3 className="font-semibold text-slate-800">How It Works</h3>
             <ol className="list-decimal list-inside space-y-1.5 text-slate-500">
               <li>Upload a PDF document.</li>
-              <li>Document is chunked and indexed into Qdrant vectors.</li>
+              <li>Wait for vector indexing to complete.</li>
               <li>Ask natural language questions in the chat.</li>
-              <li>Gemini retrieves matching context to answer.</li>
+              <li>Gemini retrieves matching context strictly from your file.</li>
             </ol>
           </div>
         </div>
 
         {/* Right Column: Interactive Chat (8 cols) */}
         <div className="lg:col-span-8">
-          <Chat activeDocument={activeDocument} />
+          <Chat
+            activeDocument={activeDocument}
+            onClearDocument={() => setActiveDocument(null)}
+          />
         </div>
       </main>
     </div>

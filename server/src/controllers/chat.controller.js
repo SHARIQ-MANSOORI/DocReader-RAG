@@ -7,6 +7,8 @@ import { executeRAGQuery } from '../services/rag.service.js';
 export async function handleChatQuery(req, res, next) {
   try {
     const userQuery = req.query.message;
+    const filename = req.query.filename;
+    const docId = req.query.docId;
 
     if (!userQuery || typeof userQuery !== 'string' || !userQuery.trim()) {
       return res.status(400).json({
@@ -15,8 +17,8 @@ export async function handleChatQuery(req, res, next) {
       });
     }
 
-    console.log(`[ChatController] Incoming query: "${userQuery.trim()}"`);
-    const result = await executeRAGQuery(userQuery.trim());
+    console.log(`[ChatController] Incoming query: "${userQuery.trim()}" (document: "${filename || docId || 'none'}")`);
+    const result = await executeRAGQuery(userQuery.trim(), { filename, docId });
     console.log(`[ChatController] Query answered with ${result.docs?.length || 0} docs.`);
 
     return res.json({

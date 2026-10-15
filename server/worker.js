@@ -39,6 +39,16 @@ const worker = new Worker(
         });
         console.log(`[Worker] Created Qdrant collection "${config.qdrant.collectionName}" with vector size 3072.`);
       }
+
+      // Ensure payload indexes exist for strict document isolation filtering
+      await client.createPayloadIndex(config.qdrant.collectionName, {
+        field_name: 'metadata.docId',
+        field_schema: 'keyword',
+      }).catch(() => {});
+      await client.createPayloadIndex(config.qdrant.collectionName, {
+        field_name: 'metadata.filename',
+        field_schema: 'keyword',
+      }).catch(() => {});
     } catch (e) {
       // Collection already exists or connection check passed
     }
@@ -52,8 +62,17 @@ const worker = new Worker(
       }
     );
 
+    const docId = data.docId || data.filename;
+    docs.forEach((doc) => {
+      doc.metadata = {
+        ...doc.metadata,
+        filename: data.filename,
+        docId: docId,
+      };
+    });
+
     await vectorStore.addDocuments(docs);
-    console.log(`[Worker] Successfully added ${docs.length} documents from "${data.filename}" to vector store.`);
+    console.log(`[Worker] Successfully added ${docs.length} documents from "${data.filename}" (docId: ${docId}) to vector store.`);
   },
   {
     concurrency: 100,

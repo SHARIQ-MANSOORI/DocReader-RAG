@@ -12,13 +12,14 @@ export const fileUploadQueue = new Queue(config.queueName, {
  * Adds an uploaded PDF to the processing queue.
  * Maintains the exact existing job format: 'file-ready' with JSON payload.
  */
-export async function addFileUploadJob({ filename, destination, path }) {
+export async function addFileUploadJob({ filename, destination, path, docId }) {
   return fileUploadQueue.add(
     'file-ready',
     JSON.stringify({
       filename,
       destination,
       path,
+      docId: docId || filename,
     })
   );
 }

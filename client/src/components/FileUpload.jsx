@@ -1,16 +1,25 @@
-import React, { useState, useRef } from 'react';
-import { Upload, FileText, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Upload, FileText, CheckCircle2, AlertCircle, X, Loader2, Sparkles } from 'lucide-react';
 import { Button } from './ui/Button.jsx';
 
 const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000';
 
-export function FileUpload({ onUploadSuccess }) {
+export function FileUpload({ onUploadSuccess, activeDocument, onClearDocument }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [indexing, setIndexing] = useState(false);
   const [uploadStatus, setUploadStatus] = useState(null); // 'success' | 'error' | null
   const [errorMessage, setErrorMessage] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef(null);
+  const pollingRef = useRef(null);
+
+  // Clear polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, []);
 
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
@@ -48,10 +57,61 @@ export function FileUpload({ onUploadSuccess }) {
     validateAndSetFile(file);
   };
 
+  const pollJobStatus = (jobId, fileInfo) => {
+    let attempts = 0;
+    const maxAttempts = 60; // 60 seconds max
+
+    if (pollingRef.current) clearInterval(pollingRef.current);
+
+    pollingRef.current = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await fetch(`${API_BASE_URL}/upload/status/${jobId}`);
+        if (!res.ok) {
+          // If status endpoint returns error or 404, assume job completed or unsupported
+          clearInterval(pollingRef.current);
+          setIndexing(false);
+          setUploadStatus('success');
+          if (onUploadSuccess) onUploadSuccess(fileInfo);
+          return;
+        }
+
+        const data = await res.json();
+
+        if (data.state === 'completed') {
+          clearInterval(pollingRef.current);
+          setIndexing(false);
+          setUploadStatus('success');
+          if (onUploadSuccess) onUploadSuccess(fileInfo);
+        } else if (data.state === 'failed') {
+          clearInterval(pollingRef.current);
+          setIndexing(false);
+          setUploadStatus('error');
+          setErrorMessage(data.failedReason || 'Vector indexing failed. Please try again.');
+        } else if (attempts >= maxAttempts) {
+          clearInterval(pollingRef.current);
+          setIndexing(false);
+          setUploadStatus('success');
+          if (onUploadSuccess) onUploadSuccess(fileInfo);
+        }
+      } catch (err) {
+        console.warn('[Status Polling Error]:', err);
+        // Fallback after retries
+        if (attempts >= maxAttempts) {
+          clearInterval(pollingRef.current);
+          setIndexing(false);
+          setUploadStatus('success');
+          if (onUploadSuccess) onUploadSuccess(fileInfo);
+        }
+      }
+    }, 1000);
+  };
+
   const handleUpload = async () => {
     if (!selectedFile) return;
 
     setUploading(true);
+    setIndexing(false);
     setUploadStatus(null);
     setErrorMessage('');
 
@@ -70,25 +130,41 @@ export function FileUpload({ onUploadSuccess }) {
         throw new Error(data.message || data.error || 'Failed to upload PDF.');
       }
 
-      setUploadStatus('success');
-      if (onUploadSuccess) {
-        onUploadSuccess(selectedFile.name);
+      const fileInfo = {
+        filename: data.filename || selectedFile.name,
+        docId: data.docId || selectedFile.name,
+      };
+
+      setUploading(false);
+
+      if (data.jobId) {
+        setIndexing(true);
+        pollJobStatus(data.jobId, fileInfo);
+      } else {
+        setUploadStatus('success');
+        if (onUploadSuccess) onUploadSuccess(fileInfo);
       }
     } catch (err) {
       console.error('[Upload Error]:', err);
+      setUploading(false);
+      setIndexing(false);
       setUploadStatus('error');
       setErrorMessage(err.message || 'Unable to upload file. Please ensure the backend server is running.');
-    } finally {
-      setUploading(false);
     }
   };
 
   const clearSelectedFile = () => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
     setSelectedFile(null);
+    setUploading(false);
+    setIndexing(false);
     setUploadStatus(null);
     setErrorMessage('');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+    if (onClearDocument) {
+      onClearDocument();
     }
   };
 
@@ -97,6 +173,12 @@ export function FileUpload({ onUploadSuccess }) {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
+
+  const activeDocName = activeDocument
+    ? typeof activeDocument === 'object'
+      ? activeDocument.filename
+      : activeDocument
+    : null;
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
@@ -159,12 +241,13 @@ export function FileUpload({ onUploadSuccess }) {
                 </p>
               </div>
             </div>
-            {!uploading && (
+            {!uploading && !indexing && (
               <button
                 type="button"
                 onClick={clearSelectedFile}
-                className="text-slate-400 hover:text-slate-600 p-1"
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
                 aria-label="Remove selected file"
+                title="Remove file"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -174,31 +257,68 @@ export function FileUpload({ onUploadSuccess }) {
           <div className="flex gap-2">
             <Button
               onClick={handleUpload}
-              loading={uploading}
-              disabled={uploading || uploadStatus === 'success'}
+              loading={uploading || indexing}
+              disabled={uploading || indexing || uploadStatus === 'success'}
               className="w-full text-xs"
             >
-              <Upload className="h-3.5 w-3.5 mr-1.5" />
-              {uploading
-                ? 'Processing...'
-                : uploadStatus === 'success'
-                ? 'Uploaded'
-                : 'Upload & Index PDF'}
+              {uploading ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                  Uploading...
+                </>
+              ) : indexing ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                  Indexing Vectors...
+                </>
+              ) : uploadStatus === 'success' ? (
+                <>
+                  <CheckCircle2 className="h-3.5 w-3.5 mr-1.5 text-white" />
+                  Indexed & Ready
+                </>
+              ) : (
+                <>
+                  <Upload className="h-3.5 w-3.5 mr-1.5" />
+                  Upload & Index PDF
+                </>
+              )}
             </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Indexing in progress banner */}
+      {indexing && (
+        <div className="mt-3 p-2.5 bg-indigo-50 border border-indigo-200 rounded-lg flex items-start gap-2 text-xs text-indigo-900 animate-pulse">
+          <Loader2 className="h-4 w-4 text-indigo-600 shrink-0 mt-0.5 animate-spin" />
+          <div>
+            <p className="font-semibold">Embedding & Indexing Vectors...</p>
+            <p className="text-[11px] text-indigo-700 mt-0.5">
+              Please wait a moment while the document chunks are indexed into Qdrant.
+            </p>
           </div>
         </div>
       )}
 
       {/* Success alert */}
       {uploadStatus === 'success' && (
-        <div className="mt-3 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg flex items-start gap-2 text-xs text-emerald-800">
-          <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-semibold">Document Uploaded Successfully</p>
-            <p className="text-[11px] text-emerald-700 mt-0.5">
-              File queued for vector indexing. You can now ask questions about it!
-            </p>
+        <div className="mt-3 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg flex items-start justify-between text-xs text-emerald-800">
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">Document Ready for Chat</p>
+              <p className="text-[11px] text-emerald-700 mt-0.5">
+                Isolated context active for "{activeDocName || selectedFile?.name}". Ask questions in the chat!
+              </p>
+            </div>
           </div>
+          <button
+            type="button"
+            onClick={clearSelectedFile}
+            className="text-[10px] text-emerald-700 underline hover:text-emerald-900 shrink-0 ml-2"
+          >
+            Upload another
+          </button>
         </div>
       )}
 

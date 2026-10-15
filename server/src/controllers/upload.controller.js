@@ -1,8 +1,8 @@
-import { addFileUploadJob } from '../services/queue.service.js';
+import { addFileUploadJob, fileUploadQueue } from '../services/queue.service.js';
 
 /**
  * Controller for handling PDF file uploads.
- * Preserves the exact response contract: { message: 'uploaded' }
+ * Returns { message: 'uploaded', jobId, filename, docId }
  */
 export async function handlePdfUpload(req, res, next) {
   try {
@@ -13,13 +13,48 @@ export async function handlePdfUpload(req, res, next) {
       });
     }
 
-    await addFileUploadJob({
+    const docId = req.file.filename;
+
+    const job = await addFileUploadJob({
       filename: req.file.originalname,
       destination: req.file.destination,
       path: req.file.path,
+      docId,
     });
 
-    return res.json({ message: 'uploaded' });
+    return res.json({
+      message: 'uploaded',
+      jobId: job.id,
+      filename: req.file.originalname,
+      docId,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+/**
+ * Controller for checking the processing status of an uploaded PDF job.
+ */
+export async function getUploadStatus(req, res, next) {
+  try {
+    const { jobId } = req.params;
+    const job = await fileUploadQueue.getJob(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: `Job ${jobId} not found.`,
+      });
+    }
+
+    const state = await job.getState(); // 'waiting' | 'active' | 'completed' | 'failed'
+
+    return res.json({
+      jobId,
+      state,
+      failedReason: job.failedReason || null,
+    });
   } catch (error) {
     return next(error);
   }
